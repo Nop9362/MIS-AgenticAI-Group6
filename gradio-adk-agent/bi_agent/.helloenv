@@ -1,0 +1,9 @@
+GOOGLE_API_KEY=AIzaSyCLtyZYWvXewGVTzQhzcjvD5WHDyCgZmNg
+
+# SQL Server Configuration
+MSSQL_SERVER=dwh.hdm-server.eu
+MSSQL_DATABASE="AdventureBikes Sales DataMart"
+MSSQL_USERNAME=mike.farmer
+MSSQL_PASSWORD=password123
+MSSQL_DRIVER="ODBC Driver 18 for SQL Server"
+TRUST_SERVER_CERTIFICATE=true
