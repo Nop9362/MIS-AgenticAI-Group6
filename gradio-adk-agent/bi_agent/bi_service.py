@@ -93,53 +93,27 @@ class BIService:
         return execute_query(self.engine, sql_query)
 
     def prepare_data_for_agents(self, df: pd.DataFrame, sql_query: str = "") -> str:
-        """
-        Prepare query results as a formatted string for agents.
-
-        Args:
-            df: Query results as DataFrame
-            sql_query: Original SQL query (optional)
-
-        Returns:
-            Formatted string with data summary, sample, and statistics
-        """
         if df is None or df.empty:
             return "No data available"
 
-        data_summary = {
-            'columns': df.columns.tolist(),
-            'row_count': len(df),
-            'sample_data': df.head(10).to_dict(orient='records'),
-            'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()}
-        }
+        # ลดจำนวน Sample จาก 10 เหลือ 5 บรรทัด
+        sample_markdown = df.head(5).to_markdown(index=False) 
 
-        # Build formatted prompt
-        prompt = f"""Here are the query results:
-"""
-
+        prompt = f"Results: {len(df)} rows returned\n"
         if sql_query:
-            prompt += f"\nSQL Query: {sql_query}\n"
+            prompt += f"SQL Query: {sql_query}\n"
+            
+        prompt += f"\nSample Data (first 5 rows):\n{sample_markdown}\n"
 
-        prompt += f"""
-Results: {len(df)} rows returned
-
-Columns: {', '.join(data_summary['columns'])}
-Data Types: {json.dumps(data_summary['dtypes'])}
-
-Sample Data (first 10 rows):
-{json.dumps(data_summary['sample_data'], indent=2)}
-"""
-
-        # Add summary statistics if there are numeric columns
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
         if numeric_cols:
-            prompt += f"""
-Summary Statistics:
-{df.describe().to_string()}
-"""
+            # เพิ่ม .round(2) เพื่อปัดเศษทศนิยม ลดจำนวน Token ตัวเลขที่เกินจำเป็น
+            # และเลือกเฉพาะค่าสำคัญๆ ไม่เอา 25%, 50%, 75% 
+            desc_df = df[numeric_cols].describe().loc[['count', 'mean', 'min', 'max']].round(2)
+            prompt += f"\nSummary Statistics:\n{desc_df.to_markdown()}\n"
 
         return prompt
-
+    
     def get_schema_for_sql_generation(self, question: str) -> str:
         """
         Get formatted prompt for SQL generation agent.
