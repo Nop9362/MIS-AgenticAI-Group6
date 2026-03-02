@@ -4,7 +4,7 @@ import pandas as pd
 import altair as alt
 import json
 import time
-import sqlparse  # <--- 🌟 1. เพิ่มบรรทัดนี้
+import sqlparse  
 from datetime import datetime
 from google.genai import types
 from dotenv import load_dotenv
