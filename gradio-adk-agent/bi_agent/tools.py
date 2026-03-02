@@ -7,11 +7,39 @@ execute queries, and process results.
 
 import os
 import json
+import math
 import pandas as pd
 from typing import Dict, Any
+from datetime import date, datetime, time
+from decimal import Decimal
 from dotenv import load_dotenv
 from .db_config import create_db_engine, get_schema_info
 from .sql_executor import execute_query, validate_sql
+
+
+class _SafeEncoder(json.JSONEncoder):
+    """JSON encoder that handles all common SQL result types."""
+    def default(self, obj):
+        if isinstance(obj, (datetime,)):
+            return obj.isoformat()
+        if isinstance(obj, date):
+            return obj.isoformat()
+        if isinstance(obj, time):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        if hasattr(obj, 'item'):          # numpy scalar
+            return obj.item()
+        if hasattr(obj, 'tolist'):        # numpy array
+            return obj.tolist()
+        return super().default(obj)
+
+
+def _safe_json(obj) -> str:
+    """Serialize obj to JSON string, safely handling all SQL result types."""
+    return json.dumps(obj, cls=_SafeEncoder, indent=2)
 
 # Load environment variables
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
@@ -108,7 +136,7 @@ def execute_sql_and_format(sql_query: str) -> str:
         password = os.getenv("MSSQL_PASSWORD")
 
         if not all([server, database, username, password]):
-            return json.dumps({
+            return _safe_json({
                 'success': False,
                 'data': [],
                 'columns': [],
@@ -146,10 +174,10 @@ def execute_sql_and_format(sql_query: str) -> str:
         # Close engine
         engine.dispose()
 
-        return json.dumps(response, indent=2)
+        return _safe_json(response)
 
     except Exception as e:
-        return json.dumps({
+        return _safe_json({
             'success': False,
             'data': [],
             'columns': [],
