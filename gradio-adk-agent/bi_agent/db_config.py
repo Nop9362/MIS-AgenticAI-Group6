@@ -1,56 +1,18 @@
 """
 Database configuration and connection management for SQL Server.
 
-This module provides utilities for connecting to Microsoft SQL Server
-and retrieving schema information for the LLM context.
+This module provides utilities for connecting to Microsoft SQL Server.
+The schema extraction has been optimized into a Dense String to save LLM tokens.
 """
 
 import urllib.parse
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-
-# ============================================================================
-# Semantic Layer (Business Metadata) - Optimized for Token Efficiency
-# ============================================================================
-BUSINESS_METADATA = {
-    # -----------------------------------------------------
-    # 🏢 TABLE LEVEL (กระชับ เน้นบังคับ JOIN)
-    # -----------------------------------------------------
-    "Facts_Monthly_Sales": "Monthly sales facts. ALWAYS JOIN Dim_ tables for text/dates.",
-    "Facts_Daily_Sales": "Daily sales facts. ALWAYS JOIN Dim_ tables.",
-    "Facts_Monthly_Sales_Quota": "Sales targets/quotas.",
-    "Dim_Product": "Product details. Use 'Material_Description' for Product Name.",
-    "Dim_Calendar_Month": "Monthly calendar (Year, Month Name). JOIN via ID_Calendar_Month.",
-    "Dim_Calendar": "Daily calendar. JOIN via ID_Calendar or ID_Order_Date.",
-    "Dim_Sales_Office": "Geography (Country, Region, Office).",
-    "Dim_Currency": "Currency names/codes.",
-
-    # -----------------------------------------------------
-    # 📊 COLUMN LEVEL (กระชับ ดักทางคำศัพท์ที่ AI ชอบมโน)
-    # -----------------------------------------------------
-    # Metrics
-    "Revenue": "Actual sales revenue. DO NOT add _EUR suffix.",
-    "Revenue_Quota": "Target/Goal revenue.",
-    "Sales_Amount": "Quantity / Units sold.",
-    "Transfer_Price": "Cost price (in Facts_ tables).",
-    "Transfer_Price_EUR": "Cost price (in Dim_Product table).",
-    
-    # Identifiers & Keys
-    "ID_Calendar_Month": "Date key. DO NOT use YEAR()/MONTH(). JOIN Dim_Calendar_Month.",
-    "ID_Order_Date": "Date key. JOIN Dim_Calendar.",
-    
-    # Descriptive Columns
-    "Material_Description": "Product Name.",
-    "Sales_Country": "Country name.",
-    "Calendar_Year": "Year (e.g., 2023).",
-    "Calendar_Month_Name": "Month Name (e.g., January)."
-}
 
 def create_db_engine(server: str, database: str, username: str, password: str, driver: str = "ODBC Driver 18 for SQL Server") -> Engine:
     """
     Create a SQLAlchemy engine for MS SQL Server connection.
     """
-    # Build ODBC connection string (not URL-encoded yet)
     odbc_string = (
         f"DRIVER={{{driver}}};"
         f"SERVER={server};"
@@ -59,17 +21,10 @@ def create_db_engine(server: str, database: str, username: str, password: str, d
         f"PWD={password};"
         f"TrustServerCertificate=yes;"
     )
-
-    # URL-encode the entire ODBC connection string
     params = urllib.parse.quote_plus(odbc_string)
-
-    # Build SQLAlchemy connection URL
     connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
-
-    # Create engine
-    engine = create_engine(connection_string, echo=False)
-
-    return engine
+    
+    return create_engine(connection_string, echo=False)
 
 
 def validate_connection(engine: Engine) -> tuple[bool, str]:
@@ -87,94 +42,36 @@ def validate_connection(engine: Engine) -> tuple[bool, str]:
 
 def get_schema_info(engine: Engine, limit_tables: list[str] = None, max_tables: int = 20) -> str:
     """
-    Retrieve database schema AND Relationships formatted for LLM context.
+    Return a highly dense, token-optimized representation of the database schema.
+    Bypasses dynamic DB querying to save ~1,500+ tokens per request, while enforcing strict rules.
     """
-    try:
-        with engine.connect() as connection:
-            # 1. Query to get table and column information
-            query_columns = text("""
-                SELECT 
-                    t.TABLE_SCHEMA, 
-                    t.TABLE_NAME, 
-                    c.COLUMN_NAME, 
-                    c.DATA_TYPE, 
-                    c.IS_NULLABLE
-                FROM INFORMATION_SCHEMA.TABLES t
-                INNER JOIN INFORMATION_SCHEMA.COLUMNS c 
-                    ON t.TABLE_SCHEMA = c.TABLE_SCHEMA 
-                    AND t.TABLE_NAME = c.TABLE_NAME
-                WHERE t.TABLE_TYPE = 'BASE TABLE'
-                ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME, c.ORDINAL_POSITION
-            """)
-            
-            # 2. Query to get Foreign Key Relationships
-            query_fks = text("""
-                SELECT 
-                    SCHEMA_NAME(tp.schema_id) + '.' + tp.name AS ParentTable,
-                    cp.name AS ParentColumn,
-                    SCHEMA_NAME(tr.schema_id) + '.' + tr.name AS ReferencedTable,
-                    cr.name AS ReferencedColumn
-                FROM sys.foreign_keys fk
-                INNER JOIN sys.tables tp ON fk.parent_object_id = tp.object_id
-                INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-                INNER JOIN sys.columns cp ON fkc.parent_object_id = cp.object_id AND fkc.parent_column_id = cp.column_id
-                INNER JOIN sys.tables tr ON fk.referenced_object_id = tr.object_id
-                INNER JOIN sys.columns cr ON fkc.referenced_object_id = cr.object_id AND fkc.referenced_column_id = cr.column_id
-            """)
+    dense_schema = """
+=== CRITICAL DATABASE SCHEMA & STRICT BUSINESS RULES ===
+(Copy column names EXACTLY. NEVER invent tables or columns)
 
-            # Fetch Data
-            result_cols = connection.execute(query_columns)
-            rows_cols = result_cols.fetchall()
-            
-            result_fks = connection.execute(query_fks)
-            rows_fks = result_fks.fetchall()
+[1. DIMENSION TABLES (Descriptive Data)]
+- dbo.Dim_Product -> columns: ID_Product (PK), Material_Description (Product Name), Material_Number, Product_Category (Text, e.g. Bikes), Product_Line, Transfer_Price_EUR (Unit cost), Product_Price_EUR, Price_Segment, Days_for_Shipping
+  🚨 RULE: NO Dim_Product_Category table exists. To group by category, use `p.Product_Category` directly from Dim_Product.
+- dbo.Dim_Calendar_Month -> columns: ID_Calendar_Month, Calendar_Month_ISO (YYYY-MM), Calendar_Month_Name (e.g. January), Calendar_Month_Number (1-12), Calendar_Year, Calendar_Quarter
+  🚨 RULE: NEVER apply YEAR()/MONTH() to ID_Calendar_Month. JOIN this table and use Calendar_Year instead.
+- dbo.Dim_Sales_Office -> columns: ID_Sales_Office, Sales_Office, Local_Currency, Sales_Region, Sales_Country, Global_Region
+- dbo.Dim_Currency -> columns: ID_Currency, Currency_Name
 
-            # Organize columns by table
-            tables = {}
-            for row in rows_cols:
-                schema_name = row[0]
-                table_name = row[1]
-                full_table_name = f"{schema_name}.{table_name}"
+[2. FACT TABLES (Metrics & Foreign Keys)]
+- dbo.Facts_Monthly_Sales -> columns: ID_Calendar_Month, ID_Currency, ID_Product, ID_Sales_Channel, ID_Sales_Office, Discount, Revenue (Sales Revenue), Sales_Amount (Units sold), Transfer_Price
+  🚨 RULE: Contains ONLY numeric metrics and FKs. ALWAYS JOIN Dim_ tables to get names. DO NOT add _EUR to Revenue.
+- dbo.Facts_Daily_Sales -> columns: ID_Order_Date, ID_Shipping_Date, ID_Currency, ID_Product, ID_Sales_Channel, ID_Sales_Office, Revenue, Discount, Sales_Amount
+- dbo.Facts_Monthly_Sales_Quota -> columns: ID_Calendar_Month, ID_Product_Category, Revenue_Quota, Sales_Amount_Quota
 
-                if limit_tables and full_table_name not in limit_tables:
-                    continue
+[3. PRE-JOINED FLAT TABLES (For Simple Queries)]
+- dbo.DataSet_Monthly_Sales -> columns: Calendar_Year, Calendar_Quarter, Calendar_Month_ISO, Product_Category, Product_Line, Material_Description, Revenue, Revenue_EUR, Discount, Sales_Amount, Transfer_Price_EUR
+  🚨 RULE: EASIEST for simple queries. If user just asks for "Revenue by Category", use this table instead of doing JOINs!
+- dbo.DataSet_Monthly_Sales_and_Quota -> Note: has spaces in column names, MUST use [brackets] like [Sales Amount Quota]
 
-                if full_table_name not in tables:
-                    tables[full_table_name] = []
-
-                column_info = {
-                    'name': row[2],
-                    'type': row[3],
-                    'nullable': row[4]
-                }
-                tables[full_table_name].append(column_info)
-
-            # Format Schema Output with Metadata
-            table_names = list(tables.keys())[:max_tables]
-            schema_text = "Database Schema with Business Metadata:\n\n"
-
-            for table_name in table_names:
-                # 1. แทรกคำอธิบายตาราง (ถ้ามี)
-                clean_table_name = table_name.split('.')[-1] # ตัด dbo. ออก
-                table_desc = BUSINESS_METADATA.get(clean_table_name, "")
-                if table_desc:
-                    schema_text += f"Table: {table_name}  -- 📝 {table_desc}\nColumns:\n"
-                else:
-                    schema_text += f"Table: {table_name}\nColumns:\n"
-
-                # 2. แทรกคำอธิบายคอลัมน์ (ถ้ามี)
-                for col in tables[table_name]:
-                    col_name = col['name']
-                    col_desc = BUSINESS_METADATA.get(col_name, "")
-                    nullable = "NULL" if col['nullable'] == 'YES' else "NOT NULL"
-                    
-                    if col_desc:
-                        schema_text += f"  - {col_name} ({col['type']}, {nullable}) -- 📝 Context: {col_desc}\n"
-                    else:
-                        schema_text += f"  - {col_name} ({col['type']}, {nullable})\n"
-                schema_text += "\n"
-
-            return schema_text
-
-    except Exception as e:
-        return f"Error retrieving schema: {str(e)}"
+[4. RELATIONSHIPS (How to JOIN)]
+- f.ID_Product = p.ID_Product (Facts to Dim_Product)
+- f.ID_Calendar_Month = d.ID_Calendar_Month (Facts to Dim_Calendar_Month)
+- f.ID_Sales_Office = s.ID_Sales_Office (Facts to Dim_Sales_Office)
+- f.ID_Currency = c.ID_Currency (Facts to Dim_Currency)
+"""
+    return dense_schema
