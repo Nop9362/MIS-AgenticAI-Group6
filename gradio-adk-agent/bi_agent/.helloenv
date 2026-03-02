@@ -1,4 +1,4 @@
-GOOGLE_API_KEY=AIzaSyCLtyZYWvXewGVTzQhzcjvD5WHDyCgZmNg
+GOOGLE_API_KEY=your_google_api_key_here
 
 # SQL Server Configuration
 MSSQL_SERVER=dwh.hdm-server.eu
