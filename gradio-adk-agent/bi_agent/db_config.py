@@ -68,7 +68,15 @@ def get_schema_info(engine: Engine, limit_tables: list[str] = None, max_tables: 
   🚨 RULE: EASIEST for simple queries. If user just asks for "Revenue by Category", use this table instead of doing JOINs!
 - dbo.DataSet_Monthly_Sales_and_Quota -> Note: has spaces in column names, MUST use [brackets] like [Sales Amount Quota]
 
-[4. RELATIONSHIPS (How to JOIN)]
+[4. STANDARD CALCULATED METRICS (Business Logic Layer)]
+🚨 USE THESE FORMULAS when asked. DO NOT invent your own math.
+- Total Cost = SUM(f.Transfer_Price * f.Sales_Amount)
+- Gross Profit = SUM(f.Revenue) - SUM(f.Transfer_Price * f.Sales_Amount)
+- Gross Margin (%) = (SUM(f.Revenue) - SUM(f.Transfer_Price * f.Sales_Amount)) / NULLIF(SUM(f.Revenue), 0) * 100
+- Average Selling Price (ASP) = SUM(f.Revenue) / NULLIF(SUM(f.Sales_Amount), 0)
+- Return on Investment (ROI) = (SUM(f.Revenue) - Total Cost) / NULLIF(Total Cost, 0) * 100
+
+[5. RELATIONSHIPS (How to JOIN)]
 - f.ID_Product = p.ID_Product (Facts to Dim_Product)
 - f.ID_Calendar_Month = d.ID_Calendar_Month (Facts to Dim_Calendar_Month)
 - f.ID_Sales_Office = s.ID_Sales_Office (Facts to Dim_Sales_Office)
