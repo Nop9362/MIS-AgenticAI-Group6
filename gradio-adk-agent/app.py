@@ -17,6 +17,49 @@ from google.adk.runners import InMemoryRunner
 load_dotenv(dotenv_path='bi_agent/.env')
 
 # ============================================================================
+# Token Tracking Utility
+# ============================================================================
+def count_tokens(text: str) -> int:
+    """Estimate token count using ~4 chars per token heuristic (matches GPT/Gemma closely)."""
+    return max(1, len(text) // 4)
+
+# Global token usage accumulator — reset on each request
+TOKEN_LOG = {}
+
+def reset_token_log():
+    global TOKEN_LOG
+    TOKEN_LOG = {
+        'sql_prompt':    0,
+        'sql_output':    0,
+        'viz_prompt':    0,
+        'viz_output':    0,
+        'exp_prompt':    0,
+        'exp_output':    0,
+    }
+
+def format_token_report() -> str:
+    """Return a markdown token usage summary for display in the UI."""
+    sql_in   = TOKEN_LOG.get('sql_prompt', 0)
+    sql_out  = TOKEN_LOG.get('sql_output', 0)
+    viz_in   = TOKEN_LOG.get('viz_prompt', 0)
+    viz_out  = TOKEN_LOG.get('viz_output', 0)
+    exp_in   = TOKEN_LOG.get('exp_prompt', 0)
+    exp_out  = TOKEN_LOG.get('exp_output', 0)
+    total_in  = sql_in + viz_in + exp_in
+    total_out = sql_out + viz_out + exp_out
+    total     = total_in + total_out
+
+    return (
+        f"### 🔢 Token Usage\n"
+        f"| Agent | Input | Output | Total |\n"
+        f"|-------|------:|-------:|------:|\n"
+        f"| 🧠 Text-to-SQL | {sql_in:,} | {sql_out:,} | {sql_in+sql_out:,} |\n"
+        f"| 📊 Visualization | {viz_in:,} | {viz_out:,} | {viz_in+viz_out:,} |\n"
+        f"| 💡 Explanation | {exp_in:,} | {exp_out:,} | {exp_in+exp_out:,} |\n"
+        f"| **Total** | **{total_in:,}** | **{total_out:,}** | **{total:,}** |"
+    )
+
+# ============================================================================
 # Caching, Runners Setup & Preload Schema
 # ============================================================================
 SQL_CACHE = {}
@@ -33,15 +76,19 @@ print("✅ Database Schema Loaded Successfully!")
 # Core Pipeline (Async)
 # ============================================================================
 async def run_bi_pipeline_async(user_question: str):
+    reset_token_log()
     normalized_question = user_question.strip().lower()
     
     if normalized_question in SQL_CACHE:
         sql_query = SQL_CACHE[normalized_question]
+        TOKEN_LOG['sql_prompt'] = 0   # cached — no prompt sent
+        TOKEN_LOG['sql_output'] = count_tokens(sql_query)
     else:
         session_sql = await text_to_sql_runner.session_service.create_session(user_id='user', app_name='text_to_sql')
         
         # 🌟 2. ใช้ PRELOADED_SCHEMA ที่โหลดไว้แล้ว แทนการดึงใหม่
         enhanced_prompt = f"Database Schema:\n{PRELOADED_SCHEMA}\n\nUser Question: {user_question}"
+        TOKEN_LOG['sql_prompt'] = count_tokens(enhanced_prompt)
         content_sql = types.Content(role='user', parts=[types.Part(text=enhanced_prompt)])
 
         events_sql = text_to_sql_runner.run_async(user_id='user', session_id=session_sql.id, new_message=content_sql)
@@ -56,6 +103,7 @@ async def run_bi_pipeline_async(user_question: str):
         sql_query = sql_query.strip()
         if sql_query.startswith("```sql"): sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
         elif sql_query.startswith("```"): sql_query = sql_query.replace("```", "").strip()
+        TOKEN_LOG['sql_output'] = count_tokens(sql_query)
         SQL_CACHE[normalized_question] = sql_query
 
     query_results_str = execute_sql_and_format(sql_query)
@@ -117,25 +165,29 @@ async def run_bi_pipeline_async(user_question: str):
     content_insight = types.Content(role='user', parts=[types.Part(text=formatted_data)])
     
     async def get_chart():
+        TOKEN_LOG['viz_prompt'] = count_tokens(formatted_data)
         session_viz = await viz_runner.session_service.create_session(user_id='user', app_name='viz_app')
         events = viz_runner.run_async(user_id='user', session_id=session_viz.id, new_message=content_insight)
         chart_spec = ""
         async for event in events:
             if event.actions and event.actions.state_delta and 'chart_spec' in event.actions.state_delta:
                 chart_spec = event.actions.state_delta['chart_spec']
+        TOKEN_LOG['viz_output'] = count_tokens(chart_spec)
         return chart_spec
 
     async def get_explanation():
+        TOKEN_LOG['exp_prompt'] = count_tokens(formatted_data)
         session_exp = await exp_runner.session_service.create_session(user_id='user', app_name='exp_app')
         events = exp_runner.run_async(user_id='user', session_id=session_exp.id, new_message=content_insight)
         explanation_text = ""
         async for event in events:
             if event.actions and event.actions.state_delta and 'explanation_text' in event.actions.state_delta:
                 explanation_text = event.actions.state_delta['explanation_text']
+        TOKEN_LOG['exp_output'] = count_tokens(explanation_text)
         return explanation_text
 
     chart_spec, explanation_text = await asyncio.gather(get_chart(), get_explanation())
-    return {'sql_query': sql_query, 'query_results': query_results_str, 'chart_spec': chart_spec, 'explanation_text': explanation_text}
+    return {'sql_query': sql_query, 'query_results': query_results_str, 'chart_spec': chart_spec, 'explanation_text': explanation_text, 'token_report': format_token_report()}
 
 # ==========================================
 # Gradio UI Functions & Logic
@@ -146,7 +198,7 @@ async def process_request_async(message: str, history_state: list, progress=gr.P
     
     try:
         if not message.strip():
-            return "Error: Empty input", None, None, "No question provided", history_state, "⏱️ Error: Empty input", format_session_log(history_state)
+            return "Error: Empty input", None, None, "No question provided", history_state, "⏱️ Error: Empty input", format_session_log(history_state), ""
 
         progress(0.2, desc="🧠 Analyzing schema & Generating SQL...")
         results = await run_bi_pipeline_async(message)
@@ -173,7 +225,7 @@ async def process_request_async(message: str, history_state: list, progress=gr.P
             error_text = f"❌ SQL Error: {error_msg}"
             # บันทึกประวัติกรณี Error
             history_state.insert(0, [timestamp, message, exec_time, "❌ Error", error_text, formatted_sql])
-            return f"-- Error\n{formatted_sql}", None, None, error_text, history_state, f"⏱️ Failed in {exec_time}", format_session_log(history_state)
+            return f"-- Error\n{formatted_sql}", None, None, error_text, history_state, f"⏱️ Failed in {exec_time}", format_session_log(history_state), ""
 
         progress(0.8, desc="📊 Designing visualizations & Extracting insights...")
         data_list = query_results.get('data', [])
@@ -215,14 +267,15 @@ async def process_request_async(message: str, history_state: list, progress=gr.P
         # บันทึกประวัติลง Session Logs
         history_state.insert(0, [timestamp, message, exec_time, "✅ Success", explanation_text, formatted_sql])
         
+        token_report = results.get('token_report', '')
         progress(1.0, desc="✨ Done!")
-        return formatted_sql, df, chart, explanation_text, history_state, f"**⏱️ Processing time:** {exec_time}", format_session_log(history_state)
+        return formatted_sql, df, chart, explanation_text, history_state, f"**⏱️ Processing time:** {exec_time}", format_session_log(history_state), token_report
         
     except Exception as e:
         exec_time = f"{round(time.time() - start_time, 2)}s"
         error_text = f"System Error: {str(e)}"
         history_state.insert(0, [timestamp, message, exec_time, "❌ System Error", error_text, "N/A"])
-        return str(e), None, None, error_text, history_state, f"⏱️ Error in {exec_time}", format_session_log(history_state)
+        return str(e), None, None, error_text, history_state, f"⏱️ Error in {exec_time}", format_session_log(history_state), ""
 
 # ฟังก์ชันจัดรูปแบบ HTML สำหรับหน้า Session Logs
 def format_session_log(history):
@@ -320,6 +373,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
                 with gr.Column(scale=1):
                     exec_summary = gr.Markdown("### 📝 Executive Summary\n*Results will appear here.*")
                     process_time = gr.Markdown("**⏱️ Processing time:** -")
+                    token_display = gr.Markdown("### 🔢 Token Usage\n*Run a query to see token counts.*")
                     
         # Tab 2: Technical Details
         with gr.TabItem("⚙️ Technical Details", id=2):
@@ -342,14 +396,14 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
     submit_btn.click(
         fn=process_request_async,
         inputs=[user_input, history_state],
-        outputs=[sql_output, data_output, chart_output, exec_summary, history_state, process_time, session_log_output]
+        outputs=[sql_output, data_output, chart_output, exec_summary, history_state, process_time, session_log_output, token_display]
     )
     
     # ผูกปุ่ม Enter จากคีย์บอร์ด
     user_input.submit(
         fn=process_request_async,
         inputs=[user_input, history_state],
-        outputs=[sql_output, data_output, chart_output, exec_summary, history_state, process_time, session_log_output]
+        outputs=[sql_output, data_output, chart_output, exec_summary, history_state, process_time, session_log_output, token_display]
     )
 
     # ผูกปุ่ม Clear
