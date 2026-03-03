@@ -300,7 +300,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"), 
             "Show monthly sales trends for products in the 'Bikes' category during the year 2023",
             "Compare the total revenue of each Currency",
             "What are the top 3 most expensive product categories based on average price?",
-            "List the product categories that have more than 50 products"
+            "Show the total sales for the first quarter (January to March) of 2023 grouped by product category",
+            "Show me the product categories and their average prices"
         ],
         inputs=user_input,
         label="💡 Quick Examples (Click to auto-fill)"
