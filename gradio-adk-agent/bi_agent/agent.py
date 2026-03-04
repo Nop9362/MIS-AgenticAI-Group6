@@ -87,6 +87,16 @@ GROUP BY d.Calendar_Year,
          d.Calendar_Month_Name
 ORDER BY d.ID_Calendar_Month ASC;
 
+  Question: "Show the total sales for the first quarter (January to March) of 2023 grouped by product category"
+  Output:
+  SELECT d.Calendar_Year, d.Calendar_Month_Number, d.Calendar_Month_Name AS Month, p.Product_Category AS Category, SUM(f.Revenue) AS Total_Revenue 
+  FROM Facts_Monthly_Sales f 
+  JOIN Dim_Calendar_Month d ON f.ID_Calendar_Month = d.ID_Calendar_Month 
+  JOIN Dim_Product p ON f.ID_Product = p.ID_Product 
+  WHERE d.Calendar_Year = 2023 AND d.Calendar_Month_Number BETWEEN 1 AND 3 
+  GROUP BY d.Calendar_Year, d.Calendar_Month_Number, d.Calendar_Month_Name, p.Product_Category 
+  ORDER BY d.Calendar_Month_Number ASC;
+
   </examples>
 
 </system_prompt>
